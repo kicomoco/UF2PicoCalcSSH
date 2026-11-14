@@ -84,7 +84,7 @@ static void header(const char *title) {
         gfx_text(4, y, "|", &font_6x12, C_BLUE, TRANSPARENT);
         gfx_text(310, y, "|", &font_6x12, C_BLUE, TRANSPARENT);
     }
-    char battery[16];
+    char battery[24];
     uint16_t color;
     battery_text(battery, sizeof(battery), &color);
     int bx = 304 - (int)strlen(battery) * 6;
@@ -391,8 +391,9 @@ static void draw_files(void) {
     for (unsigned i = 0; i < file_count; i++) {
         int y = 60 + (int)i * 14;
         if ((int)i == selected) gfx_fill(10, y - 1, 300, 14, C_SURFACE2);
-        char line[260];
-        snprintf(line, sizeof(line), "%s%s", files[i].directory ? "[DIR] " : "", files[i].name);
+        char line[sizeof(files[i].name) + 8];
+        snprintf(line, sizeof(line), "%s%.*s", files[i].directory ? "[DIR] " : "",
+                 (int)sizeof(files[i].name) - 1, files[i].name);
         text(16, y, line, (int)i == selected ? C_ACCENT : C_TEXT);
     }
     char page[64];
@@ -407,7 +408,7 @@ static void draw_terminal(void) {
     gfx_fill(0, 0, LCD_W, 16, C_SURFACE);
     char endpoint[256];
     snprintf(endpoint, sizeof(endpoint), "%s@%s", ssh.username, ssh.host);
-    char battery[16];
+    char battery[24];
     uint16_t color;
     battery_text(battery, sizeof(battery), &color);
     int bx = LCD_W - 2 - (int)strlen(battery) * 6;
@@ -475,7 +476,7 @@ static void popup_line(int row, const char *s, uint16_t color) {
 /* Curses-style dialog over the current window for WiFi/SSH progress and the countdown. */
 static bool draw_popup(void) {
     const char *title, *target, *state, *hint;
-    char target_line[80], state_line[64];
+    char target_line[sizeof(ssh.username) + sizeof(ssh.host) + sizeof(ssh.port)], state_line[64];
     uint16_t state_color = C_YELLOW;
     if (screen == TERMINAL) return false;
     if (ssh_pending()) {
@@ -555,7 +556,7 @@ static void draw_settings(void) {
     text(16, 152, "+-- Status ------------------------------------+", C_BLUE);
     bool charging = false;
     int battery = kbd_battery_percent(&charging);
-    char line[96];
+    char line[160];
     if (battery < 0) snprintf(line, sizeof(line), "Battery   unknown%s", charging ? " (charging)" : "");
     else snprintf(line, sizeof(line), "Battery   %d%%%s", battery, charging ? " (charging)" : "");
     text(16, 166, line, C_TEXT);

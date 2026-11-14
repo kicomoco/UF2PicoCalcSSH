@@ -86,8 +86,10 @@ int gfx_text_n(int x, int y, const char *s, int n, const font_t *f, uint16_t fg,
         int left_gap = x - popup_x, right_gap = popup_x + 276 - (x + (int)count * 6);
         if (left_gap - right_gap > 6 || right_gap - left_gap > 6) centre_errors++;
     }
-    strncat(rendered, s, count);
-    strcat(rendered, "\n");
+    size_t used = strlen(rendered);
+    assert(used + count + 2 <= sizeof(rendered));
+    memcpy(rendered + used, s, count);
+    memcpy(rendered + used + count, "\n", 2);
     return x + (int)count * 6;
 }
 int gfx_text_fit(int x, int y, const char *s, int w, const font_t *f, uint16_t fg, int32_t bg) {
