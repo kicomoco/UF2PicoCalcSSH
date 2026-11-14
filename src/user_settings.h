@@ -1,0 +1,50 @@
+#ifndef USER_SETTINGS_H
+#define USER_SETTINGS_H
+
+#define WOLFCRYPT_ONLY
+#define WOLFSSL_WOLFSSH
+#define SINGLE_THREADED
+#define NO_FILESYSTEM
+#define NO_WRITEV
+#define NO_DEV_RANDOM
+#define WOLFSSL_NO_SOCK
+#define WOLFSSL_USER_IO
+#define WOLFSSH_USER_IO
+#define NO_WOLFSSH_SERVER
+#define WOLFSSH_TERM
+#define NO_TERMIOS
+#define WOLFSSL_SP_MATH_ALL
+#define WOLFSSL_SP_SMALL
+#define WOLFSSL_SP_NO_MALLOC
+#define WOLFSSL_SP_4096
+#define WC_RSA_BLINDING
+#define ECC_TIMING_RESISTANT
+#define TFM_TIMING_RESISTANT
+#define HAVE_ECC
+#define HAVE_ECC_KEY_EXPORT
+#define HAVE_ECC_KEY_IMPORT
+#define HAVE_CURVE25519
+#define CURVE25519_SMALL
+#define HAVE_ED25519
+#define WOLFSSL_ED25519_STREAMING_VERIFY
+#define ED25519_SMALL
+#define HAVE_AESGCM
+#define WOLFSSL_AES_COUNTER
+#define WOLFSSL_SHA512
+#define WOLFSSL_SHA384
+#define WOLFSSL_KEY_GEN
+#define WOLFSSL_PEM_TO_DER
+#define NO_DSA
+#define NO_DES3
+#define NO_RC4
+#define NO_MD4
+#define NO_MD5
+#define NO_PWDBASED
+#define NO_PKCS12
+#define NO_ERROR_STRINGS
+#define WOLFSSL_SMALL_STACK
+#define WOLFSSH_SMALL_STACK
+#define CUSTOM_RAND_GENERATE_SEED ssh_random_seed
+int ssh_random_seed(unsigned char *out, unsigned int size);
+
+#endif

@@ -1,0 +1,8 @@
+.deps/
+build/
+build-host/
+.DS_Store
+__pycache__/
+dist/
+.venv-test/
+*.log
