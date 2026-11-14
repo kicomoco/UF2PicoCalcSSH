@@ -1,7 +1,7 @@
 # PicoCalc SSH
 
 SSH client firmware for a **ClockworkPi PicoCalc with Raspberry Pi Pico 2 W**,
-using the same **uf2loader** SD-card launch arrangement as UF2Meshtastic.
+using the same **uf2loader** SD-card launch arrangement.
 
 ## Install
 

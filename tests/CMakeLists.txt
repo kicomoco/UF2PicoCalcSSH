@@ -40,4 +40,4 @@ target_compile_definitions(ssh_integration PRIVATE SSH_HOST_TEST)
 target_compile_options(ssh_integration PRIVATE -Wall -Wextra -Werror -UNDEBUG
     -fsanitize=address,undefined -fno-omit-frame-pointer)
 target_link_options(ssh_integration PRIVATE -fsanitize=address,undefined)
-target_link_libraries(ssh_integration PRIVATE ssh_crypto)
+target_link_libraries(ssh_integration PRIVATE ssh_crypto m)
