@@ -293,6 +293,8 @@ builds and verifies the UF2 with Arm GNU Toolchain 14.2.rel1, then publishes a
 GitHub release `vX.Y.Z` with `picocalc_ssh-vX.Y.Z.uf2` and `SHA256SUMS`.
 No commit is pushed back, so releases never retrigger the workflow. To start a
 new minor/major series, edit `VERSION` (e.g. `1.1`) and the next release is `v1.1.0`.
+Any commit to `main` (even documentation-only) produces a new release, which
+is a convenient way to test the on-device updater.
 
 ## Tests and verification
 
