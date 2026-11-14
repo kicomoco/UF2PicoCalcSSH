@@ -34,7 +34,8 @@ static https_state_t run(const char *url, size_t limit) {
     body[0] = 0;
     if (!https_get(url, limit, sink, NULL)) return HTTPS_FAILED;
     https_state_t s;
-    while ((s = https_poll()) == HTTPS_BUSY) usleep(1000);
+    const struct timespec pause = {0, 1000000};
+    while ((s = https_poll()) == HTTPS_BUSY) nanosleep(&pause, NULL);
     return s;
 }
 
