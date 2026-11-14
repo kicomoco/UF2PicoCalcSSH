@@ -1,7 +1,6 @@
 #ifndef USER_SETTINGS_H
 #define USER_SETTINGS_H
 
-#define WOLFCRYPT_ONLY
 #define WOLFSSL_WOLFSSH
 #define SINGLE_THREADED
 #define NO_FILESYSTEM
@@ -44,6 +43,28 @@
 #define NO_ERROR_STRINGS
 #define WOLFSSL_SMALL_STACK
 #define WOLFSSH_SMALL_STACK
+/* TLS 1.2/1.3 client for HTTPS update checks (GitHub releases). */
+#define NO_WOLFSSL_SERVER
+#define NO_OLD_TLS
+#define WOLFSSL_TLS13
+#define HAVE_TLS_EXTENSIONS
+#define HAVE_SNI
+#define HAVE_SUPPORTED_CURVES
+#define HAVE_EXTENDED_MASTER
+#define HAVE_HKDF
+#define WC_RSA_PSS
+#define HAVE_ECC384
+#define HAVE_FFDHE_2048
+#define NO_SESSION_CACHE
+#define WOLFSSL_NO_ATOMICS
+/* No RTC: certificate dates are checked against max(build time, uptime-adjusted). */
+#define TIME_OVERRIDES
+#define HAVE_TIME_T_TYPE
+#define HAVE_TM_TYPE
+#include <time.h>
+time_t tls_time(time_t *t);
+#define XTIME(t) tls_time(t)
+#define XGMTIME(c, t) gmtime_r(c, t)
 #define CUSTOM_RAND_GENERATE_SEED ssh_random_seed
 int ssh_random_seed(unsigned char *out, unsigned int size);
 

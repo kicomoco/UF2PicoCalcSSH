@@ -7,6 +7,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <netdb.h>
+#include <time.h>
 #include <unistd.h>
 
 static int socket_fd = -1;
@@ -20,11 +22,14 @@ void transport_close(void) {
 }
 bool transport_connect(const char *host, uint16_t port) {
     transport_close();
+    struct addrinfo hints = {.ai_family = AF_INET, .ai_socktype = SOCK_STREAM}, *found = NULL;
+    char service[8];
+    snprintf(service, sizeof(service), "%u", port);
+    if (getaddrinfo(host, service, &hints, &found) || !found) return false;
     socket_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (socket_fd < 0) return false;
-    struct sockaddr_in address = {.sin_family = AF_INET, .sin_port = htons(port)};
-    if (inet_pton(AF_INET, host, &address.sin_addr) != 1) return false;
-    if (connect(socket_fd, (struct sockaddr *)&address, sizeof(address))) return false;
+    bool ok = socket_fd >= 0 && !connect(socket_fd, found->ai_addr, found->ai_addrlen);
+    freeaddrinfo(found);
+    if (!ok) return false;
     int flags = fcntl(socket_fd, F_GETFL, 0);
     if (flags < 0 || fcntl(socket_fd, F_SETFL, flags | O_NONBLOCK)) return false;
     connected = true;
@@ -47,6 +52,12 @@ int transport_write(const void *data, unsigned size) {
     if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;
     failed = true;
     return -1;
+}
+time_t tls_test_time;
+time_t tls_time(time_t *t) {
+    time_t now = tls_test_time ? tls_test_time : time(NULL);
+    if (t) *t = now;
+    return now;
 }
 int ssh_random_seed(unsigned char *out, unsigned int size) {
     arc4random_buf(out, size);

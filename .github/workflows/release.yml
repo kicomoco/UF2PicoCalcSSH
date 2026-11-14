@@ -73,11 +73,14 @@ jobs:
           python3 -m venv .venv-test
           .venv-test/bin/pip install -q -r tests/requirements.txt
           .venv-test/bin/python tests/integration.py build-host/ssh_integration
+          # The device's update checker: real GitHub certificate chains, redirects and rejections.
+          build-host/https_live
 
       - name: Build firmware
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-            -DAPP_VERSION="${{ steps.version.outputs.version }}"
+            -DAPP_VERSION="${{ steps.version.outputs.version }}" \
+            -DUPDATE_REPO="${{ github.repository }}"
           cmake --build build
           python3 tools/verify_uf2.py build/picocalc_ssh.uf2
           mkdir -p dist

@@ -41,3 +41,20 @@ target_compile_options(ssh_integration PRIVATE -Wall -Wextra -Werror -UNDEBUG
     -fsanitize=address,undefined -fno-omit-frame-pointer)
 target_link_options(ssh_integration PRIVATE -fsanitize=address,undefined)
 target_link_libraries(ssh_integration PRIVATE ssh_crypto m)
+add_executable(update_tests update_tests.c ../src/update_core.c ../src/updater.c
+    ../third_party/fatfs/ff.c ../third_party/fatfs/ffunicode.c)
+target_include_directories(update_tests PRIVATE ../src ../third_party/fatfs)
+target_compile_options(update_tests PRIVATE -include "${CMAKE_CURRENT_BINARY_DIR}/test-ffconf.h"
+    -UNDEBUG -fsanitize=address,undefined -fno-omit-frame-pointer)
+target_link_options(update_tests PRIVATE -fsanitize=address,undefined)
+target_link_libraries(update_tests PRIVATE ssh_crypto m)
+set_source_files_properties(../src/update_core.c ../src/updater.c update_tests.c
+    PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra;-Werror")
+add_test(NAME update COMMAND update_tests)
+# Needs internet access; run manually: build-host/https_live [owner/repo]
+add_executable(https_live https_live.c host_platform.c ../src/https.c ../src/ca_roots.c)
+target_include_directories(https_live PRIVATE include ../src)
+target_compile_options(https_live PRIVATE -Wall -Wextra -Werror -UNDEBUG
+    -fsanitize=address,undefined -fno-omit-frame-pointer)
+target_link_options(https_live PRIVATE -fsanitize=address,undefined)
+target_link_libraries(https_live PRIVATE ssh_crypto m)

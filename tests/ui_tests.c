@@ -3,6 +3,8 @@
 #include "network.h"
 #include "ssh_client.h"
 #include "storage.h"
+#include "system.h"
+#include "updater.h"
 #include "ui/gfx.h"
 #include "hw/keyboard.h"
 #include "pico/stdlib.h"
@@ -34,6 +36,40 @@ static int lcd_level = -1, kbd_level = -1, battery_level = 87;
 static bool battery_charging = true;
 static int popup_x = -1, popup_y = -1, popup_bottom = -1, centre_errors;
 uint16_t lcd_fb[LCD_W * LCD_H];
+static update_state_t upd_state;
+static bool upd_found = true;
+static unsigned upd_checks, upd_installs, upd_cancels, reboots;
+static size_t upd_done, upd_total;
+static char upd_error[64];
+bool updater_check(const char *version) {
+    assert(!strcmp(version, "9.8.7-test") && !updater_busy());
+    upd_checks++;
+    upd_state = UPDATE_CHECKING;
+    return true;
+}
+bool updater_install(void) {
+    assert(upd_state == UPDATE_AVAILABLE);
+    upd_installs++;
+    upd_state = UPDATE_DOWNLOADING;
+    return true;
+}
+void updater_cancel(void) {
+    upd_cancels++;
+    if (upd_state != UPDATE_VERIFYING && upd_state != UPDATE_INSTALLING) upd_state = UPDATE_IDLE;
+}
+update_state_t updater_poll(void) { return upd_state; }
+update_state_t updater_state(void) { return upd_state; }
+bool updater_busy(void) {
+    return upd_state == UPDATE_CHECKING || upd_state == UPDATE_LOCATING || upd_state == UPDATE_DOWNLOADING ||
+           upd_state == UPDATE_VERIFYING || upd_state == UPDATE_INSTALLING;
+}
+const char *updater_error(void) { return upd_error; }
+const char *updater_version(void) { return "9.9.0"; }
+const char *updater_target(void) { return "/pico2-apps/Utilities/PicoCalc SSH client (latest).uf2"; }
+bool updater_target_found(void) { return upd_found; }
+size_t updater_done_bytes(void) { return upd_done; }
+size_t updater_total_bytes(void) { return upd_total; }
+void system_reboot_to_loader(void) { reboots++; }
 const font_t font_6x12 = {6, 12, NULL};
 
 absolute_time_t get_absolute_time(void) { return clock_us; }
@@ -714,6 +750,57 @@ int main(void) {
     press(KEY_F9); established = true; tick(); press(29);
     sees("Saved SSH connections");
 
-    puts("ASCII screens, navigation, gating, scans, persistence, startup reconnect, terminal and host trust passed.");
+    /* F4 software update: check, prompt, progress, verification and the abortable reboot. */
+    online = true; active = established = false; tick();
+    press(KEY_F4); for (int i = 0; i < 4; i++) press(KEY_DOWN);
+    sees("Software"); sees("[ Check for updates ]");
+    online = false; tick(); sees("[ Check for updates ] (WiFi)");
+    press(KEY_ENTER); sees("Connect to WiFi (F1) before checking for updates."); assert(upd_checks == 0);
+    online = true; press(KEY_ENTER); assert(upd_checks == 1);
+    sees("[ Checking for updates ]"); sees("Installed: v9.8.7-test"); spin_after("Contacting GitHub... ");
+    assert(popup_y >= 0 && centre_errors == 0);
+    press('x'); press(KEY_F1); sees("Checking for updates"); sees(":: Settings"); /* Modal. */
+    upd_state = UPDATE_LOCATING; advance(300); spin_after("Finding app on SD... ");
+    press(KEY_ESC); not_sees("Checking for updates"); sees("Update cancelled."); assert(upd_state == UPDATE_IDLE);
+    press(KEY_ENTER); upd_state = UPDATE_CURRENT; advance(300);
+    sees("[ No update available ]"); sees("v9.8.7-test is installed"); sees("Latest release: v9.9.0");
+    press('q'); not_sees("No update available"); sees(":: Settings");
+    press(KEY_ENTER); upd_state = UPDATE_FAILED; strcpy(upd_error, "HTTPS certificate not trusted (-188)"); advance(300);
+    sees("[ Update failed ]"); sees("HTTPS certificate not trusted (-188)"); sees("installed app was not changed");
+    press(KEY_ENTER); not_sees("Update failed"); assert(upd_checks == 3);
+    press(KEY_ENTER); upd_state = UPDATE_AVAILABLE; advance(300);
+    sees("[ Update available ]"); sees("v9.8.7-test -> v9.9.0"); sees("Replace launched file:");
+    sees("...lities/PicoCalc SSH client (latest).uf2"); sees("Enter: download & update   Esc: later");
+    assert(centre_errors == 0);
+    press(KEY_ESC); sees("Update postponed."); assert(upd_installs == 0);
+    upd_found = false;
+    press(KEY_ENTER); upd_state = UPDATE_AVAILABLE; advance(300); sees("App file not found; save as:");
+    online = false; press(KEY_ENTER); sees("WiFi disconnected; update cancelled."); assert(upd_installs == 0);
+    online = true; upd_found = true;
+    press(KEY_ENTER); upd_state = UPDATE_AVAILABLE; advance(300); press(KEY_ENTER); assert(upd_installs == 1);
+    upd_total = 0; upd_done = 0; advance(300); spin_after("Starting download... ");
+    upd_total = 1400 * 1024; upd_done = 700 * 1024; advance(300);
+    sees("[ Downloading update ]"); sees("picocalc_ssh-v9.9.0.uf2"); spin_after("[#####-----]  50% ");
+    sees("700 / 1400 KB");
+    upd_state = UPDATE_VERIFYING; upd_done = 1400 * 1024; advance(300); sees("[ Verifying update ]");
+    unsigned cancels = upd_cancels;
+    press(KEY_ESC); press('q'); sees("[ Verifying update ]"); assert(upd_cancels == cancels);
+    sees("Please wait; do not power off");
+    upd_state = UPDATE_INSTALLING; advance(300); sees("[ Installing update ]"); spin_after("Checking app file 100% ");
+    upd_state = UPDATE_DONE; advance(300);
+    sees("[ Update installed ]"); sees("v9.9.0 saved and verified"); sees("Rebooting to loader in 5...");
+    sees("Then choose PicoCalc SSH to install"); sees("Enter: reboot now   Esc: abort");
+    assert(centre_errors == 0);
+    advance(2100); sees("Rebooting to loader in 3...");
+    press('q'); sees("Rebooting to loader"); /* Only Esc aborts. */
+    press(KEY_ESC); assert(reboots == 0); not_sees("Rebooting");
+    sees("Update saved. To install it, hold Up at power-on,");
+    advance(6000); assert(reboots == 0);
+    press(KEY_ENTER); upd_state = UPDATE_AVAILABLE; advance(300); press(KEY_ENTER);
+    upd_state = UPDATE_DONE; advance(300); press(KEY_ENTER); assert(reboots == 1);
+    press(KEY_ENTER); upd_state = UPDATE_AVAILABLE; advance(300); press(KEY_ENTER);
+    upd_state = UPDATE_DONE; advance(300); advance(4500); assert(reboots == 1); advance(600); assert(reboots == 2);
+
+    puts("ASCII screens, navigation, gating, scans, persistence, startup reconnect, terminal and host trust, software update passed.");
     return 0;
 }

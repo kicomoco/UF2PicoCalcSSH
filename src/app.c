@@ -3,8 +3,10 @@
 #include "network.h"
 #include "ssh_client.h"
 #include "storage.h"
+#include "system.h"
 #include "terminal.h"
 #include "ui/gfx.h"
+#include "updater.h"
 #include "pico/stdlib.h"
 #include <stdio.h>
 #include <string.h>
@@ -31,7 +33,11 @@ static uint32_t last_draw;
 static prefs_t prefs;
 static bool prefs_dirty;
 static uint32_t prefs_save_at;
-enum { P_SCREEN, P_KEYBOARD, P_AUTOJOIN, P_AUTOSSH, P_COUNT };
+enum { P_SCREEN, P_KEYBOARD, P_AUTOJOIN, P_AUTOSSH, P_UPDATE, P_COUNT };
+/* Software update dialog: progress while checking/downloading, then the reboot countdown. */
+#define REBOOT_DELAY_MS 5000
+static bool update_ui, reboot_countdown;
+static uint32_t reboot_deadline;
 static int setting;
 /* Saved SSH profile loaded into the form (-1 = new); F6 overwrites it in place. */
 static int editing_ssh = -1;
@@ -445,7 +451,7 @@ static void draw_help(void) {
         "[ Connect SSH ] / F9 starts the terminal.",
         "[ Save SSH profile ] / F6 saves NO password.",
         "F3 Host Keys: Delete/F8 forgets after approval.",
-        "F4 Settings: brightness, startup, battery.",
+        "F4 Settings: brightness, startup, updates.",
         "Tab/Shift+Tab or arrows: move between items.",
         "Enter: activate button / next input field.",
         "E: edit preset; F6 then updates it in place.",
@@ -474,12 +480,114 @@ static void popup_line(int row, const char *s, uint16_t color) {
 }
 
 /* Curses-style dialog over the current window for WiFi/SSH progress and the countdown. */
+/* Long SD paths keep their tail (the file name) visible. */
+static const char *path_tail(const char *path, char *out, size_t size) {
+    size_t n = strlen(path), max = POPUP_COLS - 4;
+    if (n <= max) return path;
+    snprintf(out, size, "...%s", path + n - (max - 3));
+    return out;
+}
+
+typedef struct {
+    const char *title, *target, *state, *extra, *hint;
+    uint16_t target_color, state_color;
+    char target_line[64], state_line[64], extra_line[64];
+} popup_text_t;
+
+static void update_text(popup_text_t *p) {
+    size_t done = updater_done_bytes(), total = updater_total_bytes();
+    unsigned percent = total ? (unsigned)(done * 100u / total) : 0;
+    p->target = p->target_line;
+    p->state = p->state_line;
+    p->extra = "";
+    p->hint = "Esc: cancel";
+    if (reboot_countdown) {
+        int32_t remaining = (int32_t)(reboot_deadline - to_ms_since_boot(get_absolute_time()));
+        p->title = "Update installed";
+        snprintf(p->target_line, sizeof(p->target_line), "v%s saved and verified", updater_version());
+        snprintf(p->state_line, sizeof(p->state_line), "Rebooting to loader in %u...",
+                 remaining > 0 ? ((unsigned)remaining + 999) / 1000 : 0);
+        p->state_color = C_ACCENT;
+        p->extra = "Then choose PicoCalc SSH to install";
+        p->hint = "Enter: reboot now   Esc: abort";
+        return;
+    }
+    update_state_t s = updater_state();
+    switch (s) {
+    case UPDATE_CHECKING:
+    case UPDATE_LOCATING:
+        p->title = "Checking for updates";
+        snprintf(p->target_line, sizeof(p->target_line), "Installed: v%s", APP_VERSION);
+        p->state = progress(s == UPDATE_CHECKING ? "Contacting GitHub..." : "Finding app on SD...", true);
+        break;
+    case UPDATE_AVAILABLE:
+        p->title = "Update available";
+        snprintf(p->target_line, sizeof(p->target_line), "v%s -> v%s", APP_VERSION, updater_version());
+        p->state = updater_target_found() ? "Replace launched file:" : "App file not found; save as:";
+        p->state_color = C_TEXT;
+        p->extra = path_tail(updater_target(), p->extra_line, sizeof(p->extra_line));
+        p->hint = "Enter: download & update   Esc: later";
+        break;
+    case UPDATE_DOWNLOADING: {
+        char bar[11];
+        for (unsigned i = 0; i < 10; i++) bar[i] = i < percent / 10 ? '#' : '-';
+        bar[10] = 0;
+        p->title = "Downloading update";
+        snprintf(p->target_line, sizeof(p->target_line), "picocalc_ssh-v%s.uf2", updater_version());
+        if (total) snprintf(p->state_line, sizeof(p->state_line), "[%s] %3u%%", bar, percent);
+        else snprintf(p->state_line, sizeof(p->state_line), "Starting download...");
+        p->state = progress(p->state_line, true);
+        snprintf(p->extra_line, sizeof(p->extra_line), "%u / %u KB", (unsigned)(done / 1024),
+                 (unsigned)(total / 1024));
+        p->extra = p->extra_line;
+        break;
+    }
+    case UPDATE_VERIFYING:
+    case UPDATE_INSTALLING:
+        p->title = s == UPDATE_VERIFYING ? "Verifying update" : "Installing update";
+        p->target = path_tail(updater_target(), p->target_line, sizeof(p->target_line));
+        snprintf(p->state_line, sizeof(p->state_line), "%s %3u%%",
+                 s == UPDATE_VERIFYING ? "Checking download" : "Checking app file", percent);
+        p->state = progress(p->state_line, true);
+        p->hint = "Please wait; do not power off";
+        break;
+    case UPDATE_CURRENT:
+        p->title = "No update available";
+        snprintf(p->target_line, sizeof(p->target_line), "v%s is installed", APP_VERSION);
+        snprintf(p->state_line, sizeof(p->state_line), "Latest release: v%s", updater_version());
+        p->state_color = C_ACCENT;
+        p->hint = "Any key: close";
+        break;
+    default:
+        p->title = "Update failed";
+        p->target = updater_error();
+        p->target_color = C_RED;
+        p->state = "The installed app was not changed";
+        p->state_color = C_TEXT;
+        p->hint = "Any key: close";
+        break;
+    }
+}
+
 static bool draw_popup(void) {
-    const char *title, *target, *state, *hint;
+    const char *title, *target, *state, *hint, *extra = "";
     char target_line[sizeof(ssh.username) + sizeof(ssh.host) + sizeof(ssh.port)], state_line[64];
-    uint16_t state_color = C_YELLOW;
+    uint16_t state_color = C_YELLOW, target_color = C_TEXT;
+    static popup_text_t update;
     if (screen == TERMINAL) return false;
-    if (ssh_pending()) {
+    if (update_ui) {
+        memset(&update, 0, sizeof(update));
+        update.target_color = C_TEXT;
+        update.state_color = C_YELLOW;
+        update_text(&update);
+        title = update.title;
+        target = update.target;
+        state = update.state;
+        extra = update.extra;
+        hint = update.hint;
+        target_color = update.target_color;
+        state_color = update.state_color;
+    } else if (ssh_pending()) {
         title = "Connecting SSH";
         snprintf(target_line, sizeof(target_line), "%s@%s:%s", ssh.username, ssh.host, ssh.port);
         target = target_line;
@@ -515,8 +623,9 @@ static bool draw_popup(void) {
     char caption[48];
     snprintf(caption, sizeof(caption), "[ %s ]", title);
     gfx_text(POPUP_X + (POPUP_W - (int)strlen(caption) * 6) / 2, POPUP_Y, caption, &font_6x12, C_ACCENT, C_SURFACE);
-    popup_line(2, target, C_TEXT);
+    popup_line(2, target, target_color);
     popup_line(3, state, state_color);
+    popup_line(4, extra, C_TEXT);
     popup_line(5, hint, C_DIM);
     return true;
 }
@@ -537,9 +646,9 @@ static void meter(char *out, size_t size, unsigned percent) {
 static void draw_settings(void) {
     header("PicoCalc SSH :: Settings");
     text(16, 40, "Left/Right change; saved to SD automatically.", C_DIM);
-    static const char *labels[P_COUNT] = {"Screen", "Keyboard light", "Startup WiFi", "Open SSH page"};
+    static const char *labels[P_COUNT] = {"Screen", "Keyboard light", "Startup WiFi", "Open SSH page", "Software"};
     for (int i = 0; i < P_COUNT; i++) {
-        int y = 64 + i * 20;
+        int y = 60 + i * 18;
         char value[40];
         if (i == P_SCREEN) meter(value, sizeof(value), prefs.screen_brightness);
         else if (i == P_KEYBOARD) {
@@ -548,7 +657,9 @@ static void draw_settings(void) {
             else meter(value, sizeof(value), prefs.keyboard_brightness);
         } else if (i == P_AUTOJOIN)
             snprintf(value, sizeof(value), "< %s >", prefs.auto_join ? "Auto-join known" : "Manual");
-        else snprintf(value, sizeof(value), "< %s >", prefs.auto_ssh ? "After 3s countdown" : "Manual (F2)");
+        else if (i == P_AUTOSSH)
+            snprintf(value, sizeof(value), "< %s >", prefs.auto_ssh ? "After 3s countdown" : "Manual (F2)");
+        else snprintf(value, sizeof(value), "[ Check for updates ]%s", wifi_ready() ? "" : " (WiFi)");
         if (i == setting) gfx_fill(10, y - 1, 300, 14, C_SURFACE2);
         text(16, y, labels[i], i == setting ? C_ACCENT : C_TEXT);
         text(118, y, value, i == setting ? C_ACCENT : C_TEXT);
@@ -575,7 +686,16 @@ static void settings_key(key_event_t ev) {
     if (ev.key == KEY_UP || (ev.key == KEY_TAB && (ev.mods & MOD_SHIFT)))
         setting = (setting + P_COUNT - 1) % P_COUNT;
     else if (ev.key == KEY_DOWN || ev.key == KEY_TAB) setting = (setting + 1) % P_COUNT;
-    else if (ev.key == KEY_LEFT || ev.key == KEY_RIGHT || ev.key == KEY_ENTER) {
+    else if (setting == P_UPDATE) {
+        if (ev.key != KEY_ENTER) return;
+        if (!wifi_ready()) status("Connect to WiFi (F1) before checking for updates.");
+        else if (ssh_active()) status("Disconnect SSH before checking for updates.");
+        else if (updater_check(APP_VERSION)) {
+            update_ui = true;
+            reboot_countdown = false;
+            notice[0] = 0;
+        }
+    } else if (ev.key == KEY_LEFT || ev.key == KEY_RIGHT || ev.key == KEY_ENTER) {
         int step = ev.key == KEY_LEFT ? -10 : 10;
         bool wrap = ev.key == KEY_ENTER;
         if (setting == P_SCREEN) {
@@ -813,8 +933,53 @@ static void session_ended(const char *message) {
     status(message);
 }
 
+static void reboot_now(void) {
+    if (prefs_dirty) {
+        prefs_dirty = false;
+        storage_save_prefs(&prefs);
+    }
+    gfx_fill(POPUP_X + 6, POPUP_Y + 24, POPUP_W - 12, 48, C_SURFACE);
+    popup_line(3, "Rebooting...", C_ACCENT);
+    lcd_flush();
+    update_ui = reboot_countdown = false;
+    system_reboot_to_loader();
+}
+
+static void update_key(key_event_t ev) {
+    dirty = true;
+    if (reboot_countdown) {
+        if (ev.key == KEY_ENTER) reboot_now();
+        else if (ev.key == KEY_ESC) {
+            update_ui = reboot_countdown = false;
+            status("Update saved. To install it, hold Up at power-on, then choose PicoCalc SSH in the loader menu.");
+        }
+        return;
+    }
+    update_state_t s = updater_state();
+    if (s == UPDATE_AVAILABLE) {
+        if (ev.key == KEY_ENTER && wifi_ready()) updater_install();
+        else if (ev.key == KEY_ENTER || ev.key == KEY_ESC) {
+            updater_cancel();
+            update_ui = false;
+            status(ev.key == KEY_ESC ? "Update postponed." : "WiFi disconnected; update cancelled.");
+        }
+    } else if (s == UPDATE_VERIFYING || s == UPDATE_INSTALLING) {
+        /* Not cancellable: the app file is being replaced. */
+    } else if (updater_busy()) {
+        if (ev.key == KEY_ESC) {
+            updater_cancel();
+            update_ui = false;
+            status("Update cancelled.");
+        }
+    } else {
+        updater_cancel();
+        update_ui = false;
+    }
+}
+
 static void key(key_event_t ev) {
     startup_scan = false;
+    if (update_ui) { update_key(ev); return; }
     if (ssh_countdown) {
         /* The countdown popup: Enter goes now, function keys navigate, others just dismiss. */
         ssh_countdown = false;
@@ -883,6 +1048,7 @@ void app_init(void) {
     save_join = was_connected = was_wifi = false;
     session_profile = -1;
     startup_scan = ssh_countdown = false;
+    update_ui = reboot_countdown = false;
     last_draw = 0;
     editing_ssh = -1;
     prefs_dirty = false;
@@ -988,6 +1154,14 @@ void app_poll(void) {
             dirty = true;
         }
     }
+    if (update_ui && !reboot_countdown) {
+        update_state_t before = updater_state();
+        if (updater_poll() == UPDATE_DONE) {
+            reboot_countdown = true;
+            reboot_deadline = to_ms_since_boot(get_absolute_time()) + REBOOT_DELAY_MS;
+        }
+        if (updater_state() != before) dirty = true;
+    }
     key_event_t ev;
     for (int i = 0; i < 8 && kbd_get(&ev); i++) key(ev);
     if (kbd_take_power_cycle()) { lcd_reinit(); dirty = true; }
@@ -1000,6 +1174,7 @@ void app_poll(void) {
             screen = PROFILES; selected = 0;
         }
     }
+    if (reboot_countdown && (int32_t)(now - reboot_deadline) >= 0) reboot_now();
     if (prefs_dirty && (int32_t)(now - prefs_save_at) >= 0) {
         prefs_dirty = false;
         if (!storage_save_prefs(&prefs)) status(storage_error());
@@ -1011,7 +1186,7 @@ void app_poll(void) {
     uint32_t this_frame = now / 250;
     if (this_frame != frame) {
         frame = this_frame;
-        if (wifi_busy() || ssh_pending() || (screen == SETTINGS && this_frame % 4 == 0)) dirty = true;
+        if (wifi_busy() || ssh_pending() || update_ui || (screen == SETTINGS && this_frame % 4 == 0)) dirty = true;
     }
     static bool scan_was_busy;
     bool scan_busy = wifi_scan_busy();
